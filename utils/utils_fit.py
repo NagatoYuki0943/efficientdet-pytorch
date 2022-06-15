@@ -33,6 +33,7 @@ def fit_one_epoch(model_train, model, focal_loss, loss_history, eval_callback, o
             _, regression, classification, anchors = model_train(images)
             #-------------------#
             #   计算损失
+			#   返回值为 loss总和, 分类loss, 回归loss
             #-------------------#
             loss_value, _, _ = focal_loss(classification, regression, anchors, targets, cuda = cuda)
 

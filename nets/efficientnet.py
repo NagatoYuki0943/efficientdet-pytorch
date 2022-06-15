@@ -1,3 +1,7 @@
+"""
+SiLU == Swish
+"""
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -11,15 +15,17 @@ from nets.layers import (MemoryEfficientSwish, Swish, drop_connect,
 class MBConvBlock(nn.Module):
     '''
     EfficientNet-b0:
-    [BlockArgs(kernel_size=3, num_repeat=1, input_filters=32, output_filters=16, expand_ratio=1, id_skip=True, stride=[1], se_ratio=0.25), 
-     BlockArgs(kernel_size=3, num_repeat=2, input_filters=16, output_filters=24, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25), 
-     BlockArgs(kernel_size=5, num_repeat=2, input_filters=24, output_filters=40, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25), 
-     BlockArgs(kernel_size=3, num_repeat=3, input_filters=40, output_filters=80, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25), 
-     BlockArgs(kernel_size=5, num_repeat=3, input_filters=80, output_filters=112, expand_ratio=6, id_skip=True, stride=[1], se_ratio=0.25), 
-     BlockArgs(kernel_size=5, num_repeat=4, input_filters=112, output_filters=192, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25), 
-     BlockArgs(kernel_size=3, num_repeat=1, input_filters=192, output_filters=320, expand_ratio=6, id_skip=True, stride=[1], se_ratio=0.25)]
-    
-     GlobalParams(batch_norm_momentum=0.99, batch_norm_epsilon=0.001, dropout_rate=0.2, num_classes=1000, width_coefficient=1.0, 
+    [BlockArgs(kernel_size=3, num_repeat=1, input_filters=32, output_filters=16, expand_ratio=1, id_skip=True, stride=[1], se_ratio=0.25),   256,256,32 -> 256,256,16
+     BlockArgs(kernel_size=3, num_repeat=2, input_filters=16, output_filters=24, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25),   256,256,16 -> 128,128,24
+     BlockArgs(kernel_size=5, num_repeat=2, input_filters=24, output_filters=40, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25),   128,128,24 -> 64,64,40  P3 宽高减半
+     BlockArgs(kernel_size=3, num_repeat=3, input_filters=40, output_filters=80, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25),   64,64,40 -> 32,32,80
+     BlockArgs(kernel_size=5, num_repeat=3, input_filters=80, output_filters=112, expand_ratio=6, id_skip=True, stride=[1], se_ratio=0.25),  32,32,80 -> 32,32,112   P4 宽高不变
+     BlockArgs(kernel_size=5, num_repeat=4, input_filters=112, output_filters=192, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25), 32,32,112 -> 16,16,192
+     BlockArgs(kernel_size=3, num_repeat=1, input_filters=192, output_filters=320, expand_ratio=6, id_skip=True, stride=[1], se_ratio=0.25)] 16,16,192 -> 16,16,320  p5 宽高不变
+
+    P3:64,64,40   P4:32,32,112   p5:16,16,320
+
+    GlobalParams(batch_norm_momentum=0.99, batch_norm_epsilon=0.001, dropout_rate=0.2, num_classes=1000, width_coefficient=1.0,
                     depth_coefficient=1.0, depth_divisor=8, min_depth=None, drop_connect_rate=0.2, image_size=224)
     '''
     def __init__(self, block_args, global_params):
@@ -39,7 +45,7 @@ class MBConvBlock(nn.Module):
         #----------------------------#
         #   判断是否添加残差边
         #----------------------------#
-        self.id_skip = block_args.id_skip 
+        self.id_skip = block_args.id_skip
 
         #-------------------------------------------------#
         #   利用Inverted residuals
@@ -47,6 +53,7 @@ class MBConvBlock(nn.Module):
         #-------------------------------------------------#
         inp = self._block_args.input_filters
         oup = self._block_args.input_filters * self._block_args.expand_ratio
+        # 扩张维度不为1才使用第一层卷积
         if self._block_args.expand_ratio != 1:
             self._expand_conv = Conv2d(in_channels=inp, out_channels=oup, kernel_size=1, bias=False)
             self._bn0 = nn.BatchNorm2d(num_features=oup, momentum=self._bn_mom, eps=self._bn_eps)
@@ -63,6 +70,7 @@ class MBConvBlock(nn.Module):
         #------------------------------------------------------#
         #   完成深度可分离卷积后
         #   对深度可分离卷积的结果施加注意力机制
+        #   in_channel -> 初始channel/4 -> in_channel
         #------------------------------------------------------#
         if self.has_se:
             num_squeezed_channels = max(1, int(self._block_args.input_filters * self._block_args.se_ratio))
@@ -79,6 +87,7 @@ class MBConvBlock(nn.Module):
         self._project_conv = Conv2d(in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False)
         self._bn2 = nn.BatchNorm2d(num_features=final_oup, momentum=self._bn_mom, eps=self._bn_eps)
 
+        # 前两层和se中第一层的激活函数 silu,别名swish
         self._swish = MemoryEfficientSwish()
 
     def forward(self, inputs, drop_connect_rate=None):
@@ -104,6 +113,7 @@ class MBConvBlock(nn.Module):
             x_squeezed = F.adaptive_avg_pool2d(x, 1)
             x_squeezed = self._se_expand(
                 self._swish(self._se_reduce(x_squeezed)))
+            # sigmoid将权重变换到0~1之间
             x = torch.sigmoid(x_squeezed) * x
 
         #------------------------------------------------------#
@@ -115,10 +125,10 @@ class MBConvBlock(nn.Module):
         #   part4 如果满足残差条件，那么就增加残差边
         #------------------------------------------------------#
         input_filters, output_filters = self._block_args.input_filters, self._block_args.output_filters
+        # 如果通道且宽高不变
         if self.id_skip and self._block_args.stride == 1 and input_filters == output_filters:
             if drop_connect_rate:
-                x = drop_connect(x, p=drop_connect_rate,
-                                 training=self.training)
+                x = drop_connect(x, p=drop_connect_rate, training=self.training)
             x = x + inputs  # skip connection
         return x
 
@@ -129,15 +139,17 @@ class MBConvBlock(nn.Module):
 class EfficientNet(nn.Module):
     '''
     EfficientNet-b0:
-    [BlockArgs(kernel_size=3, num_repeat=1, input_filters=32, output_filters=16, expand_ratio=1, id_skip=True, stride=[1], se_ratio=0.25), 
-     BlockArgs(kernel_size=3, num_repeat=2, input_filters=16, output_filters=24, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25), 
-     BlockArgs(kernel_size=5, num_repeat=2, input_filters=24, output_filters=40, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25), 
-     BlockArgs(kernel_size=3, num_repeat=3, input_filters=40, output_filters=80, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25), 
-     BlockArgs(kernel_size=5, num_repeat=3, input_filters=80, output_filters=112, expand_ratio=6, id_skip=True, stride=[1], se_ratio=0.25), 
-     BlockArgs(kernel_size=5, num_repeat=4, input_filters=112, output_filters=192, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25), 
-     BlockArgs(kernel_size=3, num_repeat=1, input_filters=192, output_filters=320, expand_ratio=6, id_skip=True, stride=[1], se_ratio=0.25)]
-    
-     GlobalParams(batch_norm_momentum=0.99, batch_norm_epsilon=0.001, dropout_rate=0.2, num_classes=1000, width_coefficient=1.0, 
+    [BlockArgs(kernel_size=3, num_repeat=1, input_filters=32, output_filters=16, expand_ratio=1, id_skip=True, stride=[1], se_ratio=0.25),   256,256,32 -> 256,256,16
+     BlockArgs(kernel_size=3, num_repeat=2, input_filters=16, output_filters=24, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25),   256,256,16 -> 128,128,24
+     BlockArgs(kernel_size=5, num_repeat=2, input_filters=24, output_filters=40, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25),   128,128,24 -> 64,64,40  P3 宽高减半
+     BlockArgs(kernel_size=3, num_repeat=3, input_filters=40, output_filters=80, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25),   64,64,40 -> 32,32,80
+     BlockArgs(kernel_size=5, num_repeat=3, input_filters=80, output_filters=112, expand_ratio=6, id_skip=True, stride=[1], se_ratio=0.25),  32,32,80 -> 32,32,112   P4 宽高不变
+     BlockArgs(kernel_size=5, num_repeat=4, input_filters=112, output_filters=192, expand_ratio=6, id_skip=True, stride=[2], se_ratio=0.25), 32,32,112 -> 16,16,192
+     BlockArgs(kernel_size=3, num_repeat=1, input_filters=192, output_filters=320, expand_ratio=6, id_skip=True, stride=[1], se_ratio=0.25)] 16,16,192 -> 16,16,320  p5 宽高不变
+
+    P3:64,64,40   P4:32,32,112   p5:16,16,320
+
+     GlobalParams(batch_norm_momentum=0.99, batch_norm_epsilon=0.001, dropout_rate=0.2, num_classes=1000, width_coefficient=1.0,
                     depth_coefficient=1.0, depth_divisor=8, min_depth=None, drop_connect_rate=0.2, image_size=224)
     '''
     def __init__(self, blocks_args=None, global_params=None):
@@ -158,16 +170,15 @@ class EfficientNet(nn.Module):
         #   设定输入进来的是RGB三通道图像
         #   利用round_filters可以使得通道可以被8整除
         #-------------------------------------------------#
-        in_channels = 3  
+        in_channels = 3
         out_channels = round_filters(32, self._global_params)
 
         #-------------------------------------------------#
-        #   创建stem部分
+        #   创建stem部分 宽高减半
+        #   512,512,3 -> 256,256,32
         #-------------------------------------------------#
-        self._conv_stem = Conv2d(
-            in_channels, out_channels, kernel_size=3, stride=2, bias=False)
-        self._bn0 = nn.BatchNorm2d(
-            num_features=out_channels, momentum=bn_mom, eps=bn_eps)
+        self._conv_stem = Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=False)
+        self._bn0 = nn.BatchNorm2d( num_features=out_channels, momentum=bn_mom, eps=bn_eps)
 
         #-------------------------------------------------#
         #   在这个地方对大结构块进行循环

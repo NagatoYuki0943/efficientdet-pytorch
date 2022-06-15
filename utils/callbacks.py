@@ -107,23 +107,23 @@ class EvalCallback():
                 f.write("\n")
 
     #---------------------------------------------------#
-    #   æ£€æµ‹å›¾ç‰‡
+    #   ¼ì²âÍ¼Æ¬
     #---------------------------------------------------#
     def get_map_txt(self, image_id, image, class_names, map_out_path):
         f = open(os.path.join(map_out_path, "detection-results/"+image_id+".txt"),"w") 
         image_shape = np.array(np.shape(image)[0:2])
         #---------------------------------------------------------#
-        #   åœ¨è¿™é‡Œå°†å›¾åƒè½¬æ¢æˆRGBå›¾åƒï¼Œé˜²æ­¢ç°åº¦å›¾åœ¨é¢„æµ‹æ—¶æŠ¥é”™ã€‚
-        #   ä»£ç ä»…ä»…æ”¯æŒRGBå›¾åƒçš„é¢„æµ‹ï¼Œæ‰€æœ‰å…¶å®ƒç±»å‹çš„å›¾åƒéƒ½ä¼šè½¬åŒ–æˆRGB
+        #   ÔÚÕâÀï½«Í¼Ïñ×ª»»³ÉRGBÍ¼Ïñ£¬·ÀÖ¹»Ò¶ÈÍ¼ÔÚÔ¤²âÊ±±¨´í¡£
+        #   ´úÂë½ö½öÖ§³ÖRGBÍ¼ÏñµÄÔ¤²â£¬ËùÓĞÆäËüÀàĞÍµÄÍ¼Ïñ¶¼»á×ª»¯³ÉRGB
         #---------------------------------------------------------#
         image       = cvtColor(image)
         #---------------------------------------------------------#
-        #   ç»™å›¾åƒå¢åŠ ç°æ¡ï¼Œå®ç°ä¸å¤±çœŸçš„resize
-        #   ä¹Ÿå¯ä»¥ç›´æ¥resizeè¿›è¡Œè¯†åˆ«
+        #   ¸øÍ¼ÏñÔö¼Ó»ÒÌõ£¬ÊµÏÖ²»Ê§ÕæµÄresize
+        #   Ò²¿ÉÒÔÖ±½Óresize½øĞĞÊ¶±ğ
         #---------------------------------------------------------#
         image_data = resize_image(image, (self.input_shape[1], self.input_shape[0]), self.letterbox_image)
         #---------------------------------------------------------#
-        #   æ·»åŠ ä¸Šbatch_sizeç»´åº¦ï¼Œå›¾ç‰‡é¢„å¤„ç†ï¼Œå½’ä¸€åŒ–ã€‚
+        #   Ìí¼ÓÉÏbatch_sizeÎ¬¶È£¬Í¼Æ¬Ô¤´¦Àí£¬¹éÒ»»¯¡£
         #---------------------------------------------------------#
         image_data = np.expand_dims(np.transpose(preprocess_input(np.array(image_data, dtype='float32')), (2, 0, 1)), 0)
 
@@ -132,12 +132,12 @@ class EvalCallback():
             if self.cuda:
                 images = images.cuda()
             #---------------------------------------------------------#
-            #   ä¼ å…¥ç½‘ç»œå½“ä¸­è¿›è¡Œé¢„æµ‹
+            #   ´«ÈëÍøÂçµ±ÖĞ½øĞĞÔ¤²â
             #---------------------------------------------------------#
             _, regression, classification, anchors = self.net(images)
             
             #-----------------------------------------------------------#
-            #   å°†é¢„æµ‹ç»“æœè¿›è¡Œè§£ç 
+            #   ½«Ô¤²â½á¹û½øĞĞ½âÂë
             #-----------------------------------------------------------#
             outputs     = decodebox(regression, anchors, self.input_shape)
             results     = non_max_suppression(torch.cat([outputs, classification], axis=-1), self.input_shape, 
@@ -183,20 +183,20 @@ class EvalCallback():
                 line        = annotation_line.split()
                 image_id    = os.path.basename(line[0]).split('.')[0]
                 #------------------------------#
-                #   è¯»å–å›¾åƒå¹¶è½¬æ¢æˆRGBå›¾åƒ
+                #   ¶ÁÈ¡Í¼Ïñ²¢×ª»»³ÉRGBÍ¼Ïñ
                 #------------------------------#
                 image       = Image.open(line[0])
                 #------------------------------#
-                #   è·å¾—é¢„æµ‹æ¡†
+                #   »ñµÃÔ¤²â¿ò
                 #------------------------------#
                 gt_boxes    = np.array([np.array(list(map(int,box.split(',')))) for box in line[1:]])
                 #------------------------------#
-                #   è·å¾—é¢„æµ‹txt
+                #   »ñµÃÔ¤²âtxt
                 #------------------------------#
                 self.get_map_txt(image_id, image, self.class_names, self.map_out_path)
                 
                 #------------------------------#
-                #   è·å¾—çœŸå®æ¡†txt
+                #   »ñµÃÕæÊµ¿òtxt
                 #------------------------------#
                 with open(os.path.join(self.map_out_path, "ground-truth/"+image_id+".txt"), "w") as new_f:
                     for box in gt_boxes:

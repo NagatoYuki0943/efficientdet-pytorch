@@ -1,3 +1,7 @@
+"""
+model_path ,classes_path, input_shape, confidence, nms_iou
+"""
+
 import colorsys
 import os
 import time
@@ -30,7 +34,7 @@ class Efficientdet(object):
         #   如果出现shape不匹配，同时要注意训练时的model_path和classes_path参数的修改
         #--------------------------------------------------------------------------#
         "model_path"        : 'model_data/efficientdet-d0.pth',
-        "classes_path"      : 'model_data/coco_classes.txt',
+        "classes_path"      : 'model_data/coco_classes.txt',    # 预训练模型来自coco数据集,除非自己训练,不然这里不能改
         #---------------------------------------------------------------------#
         #   用于选择所使用的模型的版本，0-7
         #---------------------------------------------------------------------#
@@ -40,7 +44,7 @@ class Efficientdet(object):
         #---------------------------------------------------------------------#
         "confidence"        : 0.3,
         #---------------------------------------------------------------------#
-        #   非极大抑制所用到的nms_iou大小
+        #   非极大抑制所用到的nms_iou大小,越小代表越严格
         #---------------------------------------------------------------------#
         "nms_iou"           : 0.3,
         #---------------------------------------------------------------------#
@@ -74,7 +78,7 @@ class Efficientdet(object):
         #   计算总的类的数量
         #---------------------------------------------------#
         self.class_names, self.num_classes  = get_classes(self.classes_path)
-        
+
         #---------------------------------------------------#
         #   画框设置不同的颜色
         #---------------------------------------------------#
@@ -123,7 +127,7 @@ class Efficientdet(object):
         #---------------------------------------------------------#
         image_data = resize_image(image, (self.input_shape[1], self.input_shape[0]), self.letterbox_image)
         #---------------------------------------------------------#
-        #   添加上batch_size维度，图片预处理，归一化。
+        #   通道转换到第二维,添加上batch_size维度，图片预处理，归一化。
         #---------------------------------------------------------#
         image_data = np.expand_dims(np.transpose(preprocess_input(np.array(image_data, dtype='float32')), (2, 0, 1)), 0)
 
@@ -133,22 +137,26 @@ class Efficientdet(object):
                 images = images.cuda()
             #---------------------------------------------------------#
             #   传入网络当中进行预测
+            # regression:       BoxNet先验框调整
+            # classification:   ClassNet分类预测
+            # anchors:          先验框
             #---------------------------------------------------------#
             _, regression, classification, anchors = self.net(images)
-            
+
             #-----------------------------------------------------------#
             #   将预测结果进行解码
             #-----------------------------------------------------------#
             outputs     = decodebox(regression, anchors, self.input_shape)
-            results     = non_max_suppression(torch.cat([outputs, classification], axis=-1), self.input_shape, 
+            # 非极大抑制,筛选出一定区域内属于同一种类得分最大的框
+            results     = non_max_suppression(torch.cat([outputs, classification], axis=-1), self.input_shape,
                                     image_shape, self.letterbox_image, conf_thres = self.confidence, nms_thres = self.nms_iou)
-               
-            if results[0] is None: 
+
+            if results[0] is None:
                 return image
 
-            top_label   = np.array(results[0][:, 5], dtype = 'int32')
-            top_conf    = results[0][:, 4]
-            top_boxes   = results[0][:, :4]
+            top_label   = np.array(results[0][:, 5], dtype = 'int32')   # 第5个值是标签
+            top_conf    = results[0][:, 4]                              # 第4个值是置信度
+            top_boxes   = results[0][:, :4]                             # 前4个值是预测框坐标
 
         #---------------------------------------------------------#
         #   设置字体与边框厚度
@@ -177,23 +185,25 @@ class Efficientdet(object):
                 left    = max(0, np.floor(left).astype('int32'))
                 bottom  = min(image.size[1], np.floor(bottom).astype('int32'))
                 right   = min(image.size[0], np.floor(right).astype('int32'))
-                
+
                 dir_save_path = "img_crop"
                 if not os.path.exists(dir_save_path):
                     os.makedirs(dir_save_path)
                 crop_image = image.crop([left, top, right, bottom])
                 crop_image.save(os.path.join(dir_save_path, "crop_" + str(i) + ".png"), quality=95, subsampling=0)
                 print("save crop_" + str(i) + ".png to " + dir_save_path)
+
         #---------------------------------------------------------#
         #   图像绘制
         #---------------------------------------------------------#
         for i, c in list(enumerate(top_label)):
-            predicted_class = self.class_names[int(c)]
-            box             = top_boxes[i]
-            score           = top_conf[i]
+            predicted_class = self.class_names[int(c)]  # 种类
+            box             = top_boxes[i]              # 坐标
+            score           = top_conf[i]               # 置信度
 
             top, left, bottom, right = box
 
+            # 防止超出边界
             top     = max(0, np.floor(top).astype('int32'))
             left    = max(0, np.floor(left).astype('int32'))
             bottom  = min(image.size[1], np.floor(bottom).astype('int32'))
@@ -204,7 +214,7 @@ class Efficientdet(object):
             label_size = draw.textsize(label, font)
             label = label.encode('utf-8')
             print(label, top, left, bottom, right)
-            
+
             if top - label_size[1] >= 0:
                 text_origin = np.array([left, top - label_size[1]])
             else:
@@ -243,12 +253,12 @@ class Efficientdet(object):
             #   传入网络当中进行预测
             #---------------------------------------------------------#
             _, regression, classification, anchors = self.net(images)
-            
+
             #-----------------------------------------------------------#
             #   将预测结果进行解码
             #-----------------------------------------------------------#
             outputs     = decodebox(regression, anchors, self.input_shape)
-            results     = non_max_suppression(torch.cat([outputs, classification], axis=-1), self.input_shape, 
+            results     = non_max_suppression(torch.cat([outputs, classification], axis=-1), self.input_shape,
                                     image_shape, self.letterbox_image, conf_thres = self.confidence, nms_thres = self.nms_iou)
 
         t1 = time.time()
@@ -258,12 +268,12 @@ class Efficientdet(object):
                 #   传入网络当中进行预测
                 #---------------------------------------------------------#
                 _, regression, classification, anchors = self.net(images)
-                
+
                 #-----------------------------------------------------------#
                 #   将预测结果进行解码
                 #-----------------------------------------------------------#
                 outputs     = decodebox(regression, anchors, self.input_shape)
-                results     = non_max_suppression(torch.cat([outputs, classification], axis=-1), self.input_shape, 
+                results     = non_max_suppression(torch.cat([outputs, classification], axis=-1), self.input_shape,
                                         image_shape, self.letterbox_image, conf_thres = self.confidence, nms_thres = self.nms_iou)
 
         t2 = time.time()
@@ -274,7 +284,7 @@ class Efficientdet(object):
     #   检测图片
     #---------------------------------------------------#
     def get_map_txt(self, image_id, image, class_names, map_out_path):
-        f = open(os.path.join(map_out_path, "detection-results/"+image_id+".txt"),"w") 
+        f = open(os.path.join(map_out_path, "detection-results/"+image_id+".txt"),"w")
         image_shape = np.array(np.shape(image)[0:2])
         #---------------------------------------------------------#
         #   在这里将图像转换成RGB图像，防止灰度图在预测时报错。
@@ -299,16 +309,16 @@ class Efficientdet(object):
             #   传入网络当中进行预测
             #---------------------------------------------------------#
             _, regression, classification, anchors = self.net(images)
-            
+
             #-----------------------------------------------------------#
             #   将预测结果进行解码
             #-----------------------------------------------------------#
             outputs     = decodebox(regression, anchors, self.input_shape)
-            results     = non_max_suppression(torch.cat([outputs, classification], axis=-1), self.input_shape, 
+            results     = non_max_suppression(torch.cat([outputs, classification], axis=-1), self.input_shape,
                                     image_shape, self.letterbox_image, conf_thres = self.confidence, nms_thres = self.nms_iou)
-               
-            if results[0] is None: 
-                return 
+
+            if results[0] is None:
+                return
 
             top_label   = np.array(results[0][:, 5], dtype = 'int32')
             top_conf    = results[0][:, 4]
@@ -326,4 +336,4 @@ class Efficientdet(object):
             f.write("%s %s %s %s %s %s\n" % (predicted_class, score[:6], str(int(left)), str(int(top)), str(int(right)),str(int(bottom))))
 
         f.close()
-        return 
+        return

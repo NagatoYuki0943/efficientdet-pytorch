@@ -1,3 +1,8 @@
+"""
+损失函数在这里
+分类损失用的FocalLoss
+回归损失用的smooth loss
+"""
 import math
 from functools import partial
 
@@ -9,7 +14,7 @@ def calc_iou(a, b):
     max_length = torch.max(a)
     a = a / max_length
     b = b / max_length
-    
+
     area = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
     iw = torch.min(torch.unsqueeze(a[:, 3], dim=1), b[:, 2]) - torch.max(torch.unsqueeze(a[:, 1], 1), b[:, 0])
     ih = torch.min(torch.unsqueeze(a[:, 2], dim=1), b[:, 3]) - torch.max(torch.unsqueeze(a[:, 0], 1), b[:, 1])
@@ -22,6 +27,7 @@ def calc_iou(a, b):
 
     return IoU
 
+"""计算真实框和先验框的IoU"""
 def get_target(anchor, bbox_annotation, classification, cuda):
     #------------------------------------------------------#
     #   计算真实框和先验框的交并比
@@ -30,7 +36,7 @@ def get_target(anchor, bbox_annotation, classification, cuda):
     #   Iou                 num_anchors, num_true_boxes
     #------------------------------------------------------#
     IoU = calc_iou(anchor[:, :], bbox_annotation[:, :4])
-    
+
     #------------------------------------------------------#
     #   计算与先验框重合度最大的真实框
     #   IoU_max             num_anchors,
@@ -44,11 +50,13 @@ def get_target(anchor, bbox_annotation, classification, cuda):
     targets = torch.ones_like(classification) * -1
     targets = targets.type_as(classification)
 
+    """重合度下于0.4为负样本"""
     #------------------------------------------#
     #   重合度小于0.4需要参与训练
     #------------------------------------------#
     targets[torch.lt(IoU_max, 0.4), :] = 0
 
+    """重合度大于0.5为正样本,0.4~0.5之间会被忽略"""
     #--------------------------------------------------#
     #   重合度大于0.5需要参与训练，还需要计算回归loss
     #--------------------------------------------------#
@@ -70,7 +78,19 @@ def get_target(anchor, bbox_annotation, classification, cuda):
     num_positive_anchors = positive_indices.sum()
     return targets, num_positive_anchors, positive_indices, assigned_annotations
 
+"""
+编码,解码的逆过程,知道真实框,调整预测框
+真实框告诉预测结果改如何调整先验框以接近真实框
+"""
 def encode_bbox(assigned_annotations, positive_indices, anchor_widths, anchor_heights, anchor_ctr_x, anchor_ctr_y):
+    """
+    assigned_annotations:   真实框
+    positive_indices        正样本下标
+    anchor_widths:          预测框宽
+    anchor_heights:         预测框高
+    anchor_ctr_x:           预测框中心x
+    anchor_ctr_y:           预测框中心y
+    """
     #--------------------------------------------------#
     #   取出作为正样本的先验框对应的真实框
     #--------------------------------------------------#
@@ -86,6 +106,7 @@ def encode_bbox(assigned_annotations, positive_indices, anchor_widths, anchor_he
 
     #--------------------------------------------------#
     #   计算真实框的宽高与中心
+    #   左上角,右下角坐标 转换为 宽高和中心
     #--------------------------------------------------#
     gt_widths = assigned_annotations[:, 2] - assigned_annotations[:, 0]
     gt_heights = assigned_annotations[:, 3] - assigned_annotations[:, 1]
@@ -98,9 +119,9 @@ def encode_bbox(assigned_annotations, positive_indices, anchor_widths, anchor_he
     #---------------------------------------------------#
     #   利用真实框和先验框进行编码，获得应该有的预测结果
     #---------------------------------------------------#
-    targets_dx = (gt_ctr_x - anchor_ctr_x_pi) / anchor_widths_pi
+    targets_dx = (gt_ctr_x - anchor_ctr_x_pi) / anchor_widths_pi    # 真实框中心 - 预测框中心 / 预测框中心, 解码时相加
     targets_dy = (gt_ctr_y - anchor_ctr_y_pi) / anchor_heights_pi
-    targets_dw = torch.log(gt_widths / anchor_widths_pi)
+    targets_dw = torch.log(gt_widths / anchor_widths_pi)            # 真实框宽高 / 预测框宽高 取对数, 解码是取对数
     targets_dh = torch.log(gt_heights / anchor_heights_pi)
 
     targets = torch.stack((targets_dy, targets_dx, targets_dh, targets_dw))
@@ -112,26 +133,34 @@ class FocalLoss(nn.Module):
         super(FocalLoss, self).__init__()
 
     def forward(self, classifications, regressions, anchors, annotations, alpha = 0.25, gamma = 2.0, cuda = True):
+        """
+        classifications:分类预测结果
+        regressions:    回归预测结果
+        anchors:        先验框
+        annotations:    真实框
+        alpha,gamma:    计算FocalLoss时用到的超参数
+        """
         #---------------------------#
         #   获得batch_size的大小
         #---------------------------#
         batch_size = classifications.shape[0]
 
         #--------------------------------------------#
-        #   获得先验框，将先验框转换成中心宽高的形式
+        #   获得先验框，将先验框 左上角,右下角坐标 转换成 中心宽高 的形式
         #--------------------------------------------#
         dtype = regressions.dtype
         anchor = anchors[0, :, :].to(dtype)
         #--------------------------------------------#
         #   将先验框转换成中心，宽高的形式
         #--------------------------------------------#
-        anchor_widths = anchor[:, 3] - anchor[:, 1]
+        anchor_widths = anchor[:, 3] - anchor[:, 1]     # 减去得到宽高
         anchor_heights = anchor[:, 2] - anchor[:, 0]
-        anchor_ctr_x = anchor[:, 1] + 0.5 * anchor_widths
+        anchor_ctr_x = anchor[:, 1] + 0.5 * anchor_widths   # 左上角加上一半宽高得到中心
         anchor_ctr_y = anchor[:, 0] + 0.5 * anchor_heights
 
         regression_losses = []
         classification_losses = []
+        # 对每一张图片进行计算
         for j in range(batch_size):
             #-------------------------------------------------------#
             #   取出每张图片对应的真实框、种类预测结果和回归预测结果
@@ -139,9 +168,10 @@ class FocalLoss(nn.Module):
             bbox_annotation = annotations[j]
             classification = classifications[j, :, :]
             regression = regressions[j, :, :]
-            
+
             classification = torch.clamp(classification, 5e-4, 1.0 - 5e-4)
-            
+
+            # 真实框个数,如果为0,所有预测框都为负样本
             if len(bbox_annotation) == 0:
                 #-------------------------------------------------------#
                 #   当图片中不存在真实框的时候，所有特征点均为负样本
@@ -150,34 +180,34 @@ class FocalLoss(nn.Module):
                 alpha_factor = alpha_factor.type_as(classification)
 
                 alpha_factor = 1. - alpha_factor
-                focal_weight = classification
+                focal_weight = classification   # 分类结果
                 focal_weight = alpha_factor * torch.pow(focal_weight, gamma)
-                
+
                 #-------------------------------------------------------#
                 #   计算特征点对应的交叉熵
                 #-------------------------------------------------------#
                 bce = - (torch.log(1.0 - classification))
-                
+
                 cls_loss = focal_weight * bce
-                
+
                 classification_losses.append(cls_loss.sum())
                 #-------------------------------------------------------#
                 #   回归损失此时为0
                 #-------------------------------------------------------#
                 regression_losses.append(torch.tensor(0).type_as(classification))
-                    
+
                 continue
 
+            """真实框不为0"""
             #------------------------------------------------------#
             #   计算真实框和先验框的交并比
             #   targets                 num_anchors, num_classes
             #   num_positive_anchors    正样本的数量
-            #   positive_indices        num_anchors, 
+            #   positive_indices        num_anchors,
             #   assigned_annotations    num_anchors, 5
             #------------------------------------------------------#
             targets, num_positive_anchors, positive_indices, assigned_annotations = get_target(anchor, 
                                                                                         bbox_annotation, classification, cuda)
-            
             #------------------------------------------------------#
             #   首先计算交叉熵loss
             #------------------------------------------------------#
@@ -188,10 +218,12 @@ class FocalLoss(nn.Module):
             #   易分类样本权值小
             #   难分类样本权值大
             #------------------------------------------------------#
+            # where函数: 参数1为True,执行参数2,否则执行参数3
+            # 正样本: alpha_factor = alpha_factor;  负样本:alpha_factor = 1 - alpha_factor
             alpha_factor = torch.where(torch.eq(targets, 1.), alpha_factor, 1. - alpha_factor)
             focal_weight = torch.where(torch.eq(targets, 1.), 1. - classification, classification)
             focal_weight = alpha_factor * torch.pow(focal_weight, gamma)
-
+            # 分类结果交叉熵
             bce = - (targets * torch.log(classification) + (1.0 - targets) * torch.log(1.0 - classification))
             cls_loss = focal_weight * bce
 
@@ -203,12 +235,14 @@ class FocalLoss(nn.Module):
             cls_loss = torch.where(torch.ne(targets, -1.0), cls_loss, zeros)
 
             classification_losses.append(cls_loss.sum() / torch.clamp(num_positive_anchors.to(dtype), min=1.0))
-            
+
             #------------------------------------------------------#
             #   如果存在先验框为正样本的话
             #------------------------------------------------------#
             if positive_indices.sum() > 0:
+                # 编码操作
                 targets = encode_bbox(assigned_annotations, positive_indices, anchor_widths, anchor_heights, anchor_ctr_x, anchor_ctr_y)
+                """回归损失用的smooth l1 loss"""
                 #---------------------------------------------------#
                 #   将网络应该有的预测结果和实际的预测结果进行比较
                 #   计算smooth l1 loss
@@ -222,11 +256,11 @@ class FocalLoss(nn.Module):
                 regression_losses.append(regression_loss.mean())
             else:
                 regression_losses.append(torch.tensor(0).type_as(classification))
-        
+
         # 计算平均loss并返回
-        c_loss = torch.stack(classification_losses).mean()
-        r_loss = torch.stack(regression_losses).mean()
-        loss = c_loss + r_loss
+        c_loss = torch.stack(classification_losses).mean()  # 分类loss
+        r_loss = torch.stack(regression_losses).mean()      # 回归loss
+        loss = c_loss + r_loss                              # loss总和
         return loss, c_loss, r_loss
 
 def get_lr_scheduler(lr_decay_type, lr, min_lr, total_iters, warmup_iters_ratio = 0.05, warmup_lr_ratio = 0.1, no_aug_iter_ratio = 0.05, step_num = 10):

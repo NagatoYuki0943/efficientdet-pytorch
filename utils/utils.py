@@ -12,13 +12,13 @@ image_sizes = [512, 640, 768, 896, 1024, 1280, 1408, 1536]
 #---------------------------------------------------------#
 def cvtColor(image):
     if len(np.shape(image)) == 3 and np.shape(image)[2] == 3:
-        return image 
+        return image
     else:
         image = image.convert('RGB')
-        return image 
+        return image
 
 #---------------------------------------------------#
-#   对输入图像进行resize
+#   对输入图像进行resize,变为正方形,周围添加灰条
 #---------------------------------------------------#
 def resize_image(image, size, letterbox_image):
     iw, ih  = image.size
@@ -50,7 +50,10 @@ def get_classes(classes_path):
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
-        
+
+#---------------------------------------------------#
+#   归一化率
+#---------------------------------------------------#
 def preprocess_input(image):
     image   /= 255
     mean    = (0.485, 0.456, 0.406)

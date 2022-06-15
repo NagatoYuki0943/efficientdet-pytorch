@@ -2,37 +2,51 @@ import numpy as np
 import torch
 from torchvision.ops import nms
 
+"""利用预测结果调整先验框得到预测框"""
 def decodebox(regression, anchors, input_shape):
+    """
+    regression: 回归预测结果   [b, h*w*num_anchors, 4]
+                 先验框总数       中心和宽高参数
+    anchors: 先验框            [b, h*w*num_anchors, 4]
+    input_shape: 图片
+    """
     dtype   = regression.dtype
     anchors = anchors.to(dtype)
+
+    """将先验框形式由 左上角坐标+右下角坐标 形式转换为 中心+宽高 的形式"""
     #--------------------------------------#
     #   计算先验框的中心
+    #   (x1+x2)/2  (y1+y2)/2
     #--------------------------------------#
     y_centers_a = (anchors[..., 0] + anchors[..., 2]) / 2
     x_centers_a = (anchors[..., 1] + anchors[..., 3]) / 2
 
     #--------------------------------------#
     #   计算先验框的宽高
+    #   x2-x1 y2-y1
     #--------------------------------------#
     ha = anchors[..., 2] - anchors[..., 0]
     wa = anchors[..., 3] - anchors[..., 1]
 
     #--------------------------------------#
-    #   计算调整后先验框的宽高
+    #   计算调整后先验框的宽高  取指数乘以宽高,编码时取对数
     #   即计算预测框的宽高
     #--------------------------------------#
     w = regression[..., 3].exp() * wa
     h = regression[..., 2].exp() * ha
 
+    """调整中心和宽高"""
     #--------------------------------------#
-    #   计算调整后先验框的中心
+    #   计算调整后先验框的中心  乘上宽高加上中心坐标,编码时减去
     #   即计算预测框的中心
     #--------------------------------------#
     y_centers = regression[..., 0] * ha + y_centers_a
     x_centers = regression[..., 1] * wa + x_centers_a
 
+    """中心+宽高 => 左上角坐标+右下角坐标"""
     #--------------------------------------#
     #   计算预测框的左上角右下角
+    #   中心位置 + 1/2宽高
     #--------------------------------------#
     ymin = y_centers - h / 2.
     xmin = x_centers - w / 2.
@@ -63,20 +77,20 @@ def decodebox(regression, anchors, input_shape):
     #     ax.add_patch(rect1)
 
     # ax = fig.add_subplot(122)
-    
+
     # grid_x = x_centers_a[0,-4*4*9:]
     # grid_y = y_centers_a[0,-4*4*9:]
     # plt.scatter(grid_x.cpu(),grid_y.cpu())
     # plt.ylim(-600,1200)
     # plt.xlim(-600,1200)
     # plt.gca().invert_yaxis()
-    
+
     # y_centers = y_centers[0,-4*4*9:]
     # x_centers = x_centers[0,-4*4*9:]
 
     # pre_left = xmin[0,-4*4*9:]
     # pre_top = ymin[0,-4*4*9:]
-    
+
     # pre_w = xmax[0,-4*4*9:]-xmin[0,-4*4*9:]
     # pre_h = ymax[0,-4*4*9:]-ymin[0,-4*4*9:]
 
@@ -86,6 +100,7 @@ def decodebox(regression, anchors, input_shape):
     #     ax.add_patch(rect1)
 
     # plt.show()
+    # 归一化,除以宽高, 防止超出图片范围
     boxes[:, :, [0, 2]] = boxes[:, :, [0, 2]] / input_shape[1]
     boxes[:, :, [1, 3]] = boxes[:, :, [1, 3]] / input_shape[0]
 
@@ -112,10 +127,10 @@ def bbox_iou(box1, box2, x1y1x2y2=True):
 
     inter_area = torch.clamp(inter_rect_x2 - inter_rect_x1, min=0) * \
                  torch.clamp(inter_rect_y2 - inter_rect_y1, min=0)
-                 
+
     b1_area = (b1_x2 - b1_x1) * (b1_y2 - b1_y1)
     b2_area = (b2_x2 - b2_x1) * (b2_y2 - b2_y1)
-    
+
     iou = inter_area / torch.clamp(b1_area + b2_area - inter_area, min = 1e-6)
 
     return iou
@@ -147,48 +162,52 @@ def efficientdet_correct_boxes(box_xy, box_wh, input_shape, image_shape, letterb
     boxes *= np.concatenate([image_shape, image_shape], axis=-1)
     return boxes
 
+"""非极大值抑制,筛选出一定区域内属于同一种类得分最大的框"""
 def non_max_suppression(prediction, input_shape, image_shape, letterbox_image, conf_thres=0.5, nms_thres=0.4):
     output = [None for _ in range(len(prediction))]
-    
+
     #----------------------------------------------------------#
-    #   预测只用一张图片，只会进行一次
+    #   循环图片,预测只用一张图片，只会进行一次
     #----------------------------------------------------------#
     for i, image_pred in enumerate(prediction):
         #----------------------------------------------------------#
+        #   image_pred[:, 4:]取出种类预测
         #   对种类预测部分取max。
         #   class_conf  [num_anchors, 1]    种类置信度
-        #   class_pred  [num_anchors, 1]    种类
+        #   class_pred  [num_anchors, 1]    种类预测值
         #----------------------------------------------------------#
         class_conf, class_pred = torch.max(image_pred[:, 4:], 1, keepdim=True)
 
         #----------------------------------------------------------#
-        #   利用置信度进行第一轮筛选
+        #   利用置信度进行第一轮筛选,是否大于门限,返回0/1
         #----------------------------------------------------------#
         conf_mask = (class_conf[:, 0] >= conf_thres).squeeze()
 
         #----------------------------------------------------------#
-        #   根据置信度进行预测结果的筛选
+        #   根据置信度进行预测结果的筛选,使用0/1筛选
         #----------------------------------------------------------#
         image_pred = image_pred[conf_mask]
         class_conf = class_conf[conf_mask]
         class_pred = class_pred[conf_mask]
         if not image_pred.size(0):
             continue
+
         #-------------------------------------------------------------------------#
         #   detections  [num_anchors, 6]
-        #   6的内容为：x1, y1, x2, y2, class_conf, class_pred
+        #   6的内容为：x1, y1, x2, y2, class_conf(种类置信度), class_pred(种类预测值)
         #-------------------------------------------------------------------------#
         detections = torch.cat((image_pred[:, :4], class_conf.float(), class_pred.float()), 1)
 
         #------------------------------------------#
         #   获得预测结果中包含的所有种类
         #------------------------------------------#
-        unique_labels = detections[:, -1].cpu().unique()
+        unique_labels = detections[:, -1].cpu().unique()    # unique减少后面的循环
 
         if prediction.is_cuda:
             unique_labels = unique_labels.cuda()
             detections = detections.cuda()
 
+        # 循环所有预测的种类
         for c in unique_labels:
             #------------------------------------------#
             #   获得某一类得分筛选后全部的预测结果
@@ -199,12 +218,12 @@ def non_max_suppression(prediction, input_shape, image_shape, letterbox_image, c
             #   使用官方自带的非极大抑制会速度更快一些！
             #------------------------------------------#
             keep = nms(
-                detections_class[:, :4],
-                detections_class[:, 4],
+                detections_class[:, :4],    # 坐标
+                detections_class[:, 4],     # 先验框置信度 * 种类置信度 结果是1维数据
                 nms_thres
             )
             max_detections = detections_class[keep]
-            
+
             # #------------------------------------------#
             # #   按照存在物体的置信度排序
             # #------------------------------------------#
@@ -228,9 +247,10 @@ def non_max_suppression(prediction, input_shape, image_shape, letterbox_image, c
             # #   堆叠
             # #------------------------------------------#
             # max_detections = torch.cat(max_detections).data
-            
+
             output[i] = max_detections if output[i] is None else torch.cat((output[i], max_detections))
 
+        # 去除图片灰条
         if output[i] is not None:
             output[i]           = output[i].cpu().numpy()
             box_xy, box_wh      = (output[i][:, 0:2] + output[i][:, 2:4])/2, output[i][:, 2:4] - output[i][:, 0:2]
