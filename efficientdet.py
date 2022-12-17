@@ -42,7 +42,7 @@ class Efficientdet(object):
         #---------------------------------------------------------------------#
         #   只有得分大于置信度的预测框会被保留下来
         #---------------------------------------------------------------------#
-        "confidence"        : 0.3,
+        "confidence"        : 0.5,
         #---------------------------------------------------------------------#
         #   非极大抑制所用到的nms_iou大小,越小代表越严格
         #---------------------------------------------------------------------#
@@ -73,7 +73,7 @@ class Efficientdet(object):
         self.__dict__.update(self._defaults)
         for name, value in kwargs.items():
             setattr(self, name, value)
-            self._defaults[name] = value 
+            self._defaults[name] = value
 
         self.input_shape                    = [image_sizes[self.phi], image_sizes[self.phi]]
         #---------------------------------------------------#
@@ -89,9 +89,9 @@ class Efficientdet(object):
         self.colors = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)), self.colors))
 
         self.generate()
-        
+
         show_config(**self._defaults)
-        
+
     #---------------------------------------------------#
     #   载入模型
     #---------------------------------------------------#
@@ -139,9 +139,9 @@ class Efficientdet(object):
                 images = images.cuda()
             #---------------------------------------------------------#
             #   传入网络当中进行预测
-            # regression:       BoxNet先验框调整
-            # classification:   ClassNet分类预测
-            # anchors:          先验框
+            # regression:     BoxNet先验框调整 [b, h*w*num_anchors,, 4]
+            # classification: ClassNet分类预测 [b, h*w*num_anchors,, 90]
+            # anchors:        先验框           [b, h*w*num_anchors,, 4]
             #---------------------------------------------------------#
             _, regression, classification, anchors = self.net(images)
 

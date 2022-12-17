@@ -616,8 +616,8 @@ class EfficientDetBackbone(nn.Module):
         anchors = self.anchors(inputs)
 
         # features:       (p3, p4, p5)
-        # regression:     BoxNet先验框调整
-        # classification: ClassNet分类预测
-        # anchors:        先验框
+        # regression:     BoxNet先验框调整 [1, h*w*num_anchors, 4]
+        # classification: ClassNet分类预测 [1, h*w*num_anchors, 90]
+        # anchors:        先验框           [1, h*w*num_anchors, 4]
         return features, regression, classification, anchors
 
