@@ -106,7 +106,7 @@ class BiFPN(nn.Module):
                 nn.BatchNorm2d(num_channels, momentum=0.01, eps=1e-3),
             )
 
-            """下面两次是添加的数据获取,net只能获取p3,p4,p5,下面获取p5p6"""
+            """下面两次是添加的数据获取,net只能获取p3,p4,p5,下面获取p6,p7"""
             # 对输入进来的p5进行宽高的下采样
             # C5 16, 16, 320 -> 8, 8, 64
             self.p5_to_p6 = nn.Sequential(
@@ -395,7 +395,7 @@ class BoxNet(nn.Module):
         # 每一个有效特征层对应的Batchnor,5个特征层有5个bn列表
         self.bn_list = nn.ModuleList(
             [nn.ModuleList([nn.BatchNorm2d(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in range(5)])
-        
+
         # 9个先验框 4个参数 中心，宽高
         # 调整通道数,获得最后的分类 num_anchors = 9 * 4 = 36
         self.header = SeparableConvBlock(in_channels, num_anchors * 4, norm=False, activation=False)
@@ -446,7 +446,7 @@ class ClassNet(nn.Module):
         # 每一个有效特征层对应的Batchnor,5个特征层有5个bn列表
         self.bn_list = nn.ModuleList(
             [nn.ModuleList([nn.BatchNorm2d(in_channels, momentum=0.01, eps=1e-3) for i in range(num_layers)]) for j in range(5)])
-        
+
         # 9 个先验框 num_classes
         self.header = SeparableConvBlock(in_channels, num_anchors * num_classes, norm=False, activation=False)
         self.swish = MemoryEfficientSwish() if not onnx_export else Swish()
@@ -574,7 +574,7 @@ class EfficientDetBackbone(nn.Module):
                     conv_channel_coef[phi],
                     True if _ == 0 else False,  # 第一次BiFPN为True
                     attention=True if phi < 6 else False)
-              for _ in range(self.fpn_cell_repeats[phi])])
+            for _ in range(self.fpn_cell_repeats[phi])])
 
         self.num_classes = num_classes
         #------------------------------------------------------#
@@ -620,4 +620,3 @@ class EfficientDetBackbone(nn.Module):
         # classification: ClassNet分类预测 [1, h*w*num_anchors, 90]
         # anchors:        先验框           [1, h*w*num_anchors, 4]
         return features, regression, classification, anchors
-
